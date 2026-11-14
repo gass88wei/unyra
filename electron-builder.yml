@@ -117,6 +117,9 @@ linux:
 
 # deb 包元数据：装上后「归一 Unyra」出现在教育类菜单，apt/商店能正确识别
 deb:
+  # .deb 规范强制要求 maintainer（Windows NSIS 不需要）。上游 package.json 的 author
+  # 只有名字没有邮箱，不写这条 electron-builder 会直接报「Please specify author 'email'」
+  maintainer: gass88wei <gass88wei@users.noreply.github.com>
   # Electron 应用常规运行时依赖（electron-builder 也会自动带一份，这里显式写出
   # 是为了 apt-get install ./Unyra-*.deb 时一次解析干净，不留半配置状态）
   depends:
