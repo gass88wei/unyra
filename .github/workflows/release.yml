@@ -102,24 +102,30 @@ jobs:
           [ -n "$BIN" ] || { echo '解包后找不到可执行的 ELF 主程序'; exit 1; }
           echo "可执行文件: $BIN"
 
-          # 1) 静态检查：所有 ELF 依赖版本必须能被当前系统提供
+          # 1) 静态检查：x86-64 ELF 的 GLIBC/GLIBCXX/CXXABI 依赖版本必须能被当前系统提供。
+          #    只查 x86-64：onnxruntime-node 等 npm 包会把 arm64 二进制一起收进包，
+          #    那些库在本机根本不会加载，检查它们只会误报。
           python3 - "$BIN" <<'PY'
           import subprocess, sys, os, re
           root = os.path.dirname(sys.argv[1])
+          ver = re.compile(r'(GLIBC_[0-9.]+|GLIBCXX_[0-9.]+|CXXABI_[0-9.]+)')
           provided = set()
           for lib in ('/lib/x86_64-linux-gnu/libc.so.6',
                       '/usr/lib/x86_64-linux-gnu/libstdc++.so.6',
-                      '/lib/x86_64-linux-gnu/libstdc++.so.6',
-                      '/lib/x86_64-linux-gnu/libgcc_s.so.1'):
+                      '/lib/x86_64-linux-gnu/libstdc++.so.6'):
               if os.path.exists(lib):
                   out = subprocess.run(['objdump', '-T', lib], capture_output=True, text=True).stdout
-                  provided |= set(re.findall(r'(GLIBC_[0-9.]+|GLIBCXX_[0-9.]+|CXXABI_[0-9.]+|GCC_[0-9.]+)', out))
+                  provided |= set(ver.findall(out))
           bad = []
-          ver = re.compile(r'(GLIBC_[0-9.]+|GLIBCXX_[0-9.]+|CXXABI_[0-9.]+|GCC_[0-9.]+)')
           for base, _, files in os.walk(root):
               for f in files:
                   p = os.path.join(base, f)
                   if not (f.endswith('.so') or '.so.' in f or os.access(p, os.X_OK)):
+                      continue
+                  with open(p, 'rb') as fh:
+                      head = fh.read(20)
+                  # ELF 且 e_machine == EM_X86_64 (62)，跳过 arm64/其它架构的二进制
+                  if len(head) < 20 or head[:4] != b'\x7fELF' or head[18] != 62:
                       continue
                   r = subprocess.run(['objdump', '-T', p], capture_output=True, text=True)
                   if r.returncode != 0:
@@ -131,7 +137,7 @@ jobs:
               for f, v in sorted(set(bad))[:20]:
                   print(f'不满足的符号版本: {f} -> {v}', file=sys.stderr)
               sys.exit(1)
-          print('静态检查通过：没有超出构建系统的 GLIBC/CXXABI/GLIBCXX 依赖')
+          print('静态检查通过：x86-64 二进制没有超出构建系统的 GLIBC/CXXABI/GLIBCXX 依赖')
           PY
 
           # 2) 实际启动：xvfb 里跑 8 秒，主进程一启动就退出算成功；
