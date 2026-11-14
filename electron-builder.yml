@@ -112,9 +112,8 @@ linux:
   category: Education
   # 文件名用 ASCII + 版本 + 架构，下载/传输不会乱码，也方便一眼看出是 Linux 包
   artifactName: Unyra-${version}-Linux-${arch}.${ext}
-  # desktop 里的中文 Name 照常显示，StartupWMClass 与 appId 对齐，图标不串
-  desktop:
-    StartupWMClass: 归一 Unyra
+  # .desktop 文件由 electron-builder 按 productName 自动生成（Name/StartupWMClass 都在内），
+  # 26.x 起不再接受手写的 linux.desktop 段
 
 # deb 包元数据：装上后「归一 Unyra」出现在教育类菜单，apt/商店能正确识别
 deb:
