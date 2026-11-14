@@ -8,8 +8,8 @@
   *从一个想弄懂的目标出发，把知识逐层拆成可探索的拓扑节点，让超级导师在讲义上为你动笔。*
 
   <p align="center">
-    <a href="https://github.com/maplexrain/unyra/releases"><img src="https://img.shields.io/badge/Release-v0.7.10-crimson?style=flat-square&logo=github" alt="Release"></a>
-    <a href="https://github.com/maplexrain/unyra/releases"><img src="https://img.shields.io/badge/Platform-Windows-blue?style=flat-square&logo=windows" alt="Platform"></a>
+    <a href="https://github.com/gass88wei/unyra/releases"><img src="https://img.shields.io/badge/Release-v0.7.10-crimson?style=flat-square&logo=github" alt="Release"></a>
+    <a href="https://github.com/gass88wei/unyra/releases"><img src="https://img.shields.io/badge/Platform-Linux%20%2F%20Windows-FCC624?style=flat-square&logo=linux" alt="Platform"></a>
     <a href="https://www.electronjs.org/"><img src="https://img.shields.io/badge/Electron-44-47848F?style=flat-square&logo=electron" alt="Electron"></a>
     <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react" alt="React"></a>
     <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-7-3178C6?style=flat-square&logo=typescript" alt="TypeScript"></a>
@@ -17,7 +17,7 @@
     <a href="docs/README.md"><img src="https://img.shields.io/badge/Docs-Architecture%20%26%20Guides-emerald?style=flat-square" alt="Documentation"></a>
   </p>
 
-  [📥 下载安装包 (Releases)](https://github.com/maplexrain/unyra/releases) · [📖 项目架构文档](docs/README.md) · [💬 提交反馈与交流群](#-社区与反馈) · [❤️ 赞助支持](#-致谢与赞助)
+  [📥 下载安装包 (Releases)](https://github.com/gass88wei/unyra/releases) · [📖 项目架构文档](docs/README.md) · [💬 提交反馈与交流群](#-社区与反馈) · [❤️ 赞助支持](#-致谢与赞助)
 </div>
 
 <br />

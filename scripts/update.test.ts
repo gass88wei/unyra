@@ -79,9 +79,12 @@ const builder = readYaml('electron-builder.yml') as {
 const pub = builder.publish?.[0]
 ok(!!pub, 'electron-builder.yml 配了 publish（没有它，安装包里不会有 app-update.yml）')
 ok(pub?.provider === 'github', 'publish provider 是 github', pub?.provider)
+// fork 出去后发布仓库可以换，但必须与 update-core 的 RELEASE_REPO 一致：
+// 两处写岔了，检查更新会永远说「已是最新」或「发布页 404」，且没有任何报错
+const [expectedOwner, expectedRepo] = RELEASE_REPO.split('/')
 ok(
-  pub?.owner === 'maplexrain' && pub?.repo === 'unyra',
-  'publish 指向开源发布仓库 maplexrain/unyra',
+  pub?.owner === expectedOwner && pub?.repo === expectedRepo,
+  'publish 指向发布仓库 ' + RELEASE_REPO,
   pub?.owner + '/' + pub?.repo,
 )
 // 只有 'release' 会出现在 releases/latest 与 releases.atom 里；draft 等于没发布

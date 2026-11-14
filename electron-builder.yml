@@ -5,6 +5,7 @@
 #
 # 用法：npm run release:win（= 先 npm run build，再交给 electron-builder）
 # 产物在 release/ 下：GUI 安装包 .exe，以及免安装的 win-unpacked/ 目录。
+# Linux 版本由 .github/workflows/release.yml 在 ubuntu-22.04 上打 .deb。
 
 appId: com.moji.guiyi # 与 electron/main.ts 的 setAppUserModelId 一致：任务栏与通知按它归组
 productName: 归一 Unyra # 安装向导、快捷方式、控制面板里显示的名字
@@ -26,8 +27,10 @@ files:
   # 不排掉 node_modules 的话，electron-builder 会把 production dependencies 整份拷进 asar
   # （react / marked / katex / tailwind 都挂在 dependencies 上），而运行时一个都不需要：
   # dist/ 是 vite 打好的整包、dist-electron/*.cjs 是 esbuild 打好的单文件。
-  # **唯一的例外是语音识别的原生运行时**（见 electron/voice.ts）：它是 .node + 几个 DLL，
-  # esbuild 打不进去，只能按目录带进包并解到 asar 外面（asarUnpack）。
+  # **唯一的例外是语音识别与 OCR 的原生运行时**（见 electron/voice.ts、electron/ocr.ts）：
+  # 它们是 .node + 动态库，esbuild 打不进去，只能按目录带进包并解到 asar 外面（asarUnpack）。
+  # 语音模型（约 228 MB）不随包分发：本机已有模型的把文件放进用户数据目录的
+  # voice-models/sensevoice-small/ 即可，缺文件时语音功能保持占位状态、不会触发下载。
   - dist/**/*
   - dist-electron/**/*
   - package.json
@@ -97,6 +100,38 @@ dmg:
       type: link
       path: /Applications
 
+# Linux 打包：只出 x64 的 .deb，给 deepin / Debian 系用 apt 装（能一起解析依赖）。
+# 构建固定在 ubuntu-22.04（glibc 2.35）上，保证在 glibc 2.38 的 deepin 上起得来。
+# 图标沿用 build/icon.png：electron-builder 会按 freedesktop 规范生成各尺寸 PNG 装进
+# /usr/share/icons/hicolor/，开始菜单与任务栏都认。
+linux:
+  target:
+    - target: deb
+      arch: [x64]
+  icon: build/icon.png
+  category: Education
+  # 文件名用 ASCII + 版本 + 架构，下载/传输不会乱码，也方便一眼看出是 Linux 包
+  artifactName: Unyra-${version}-Linux-${arch}.${ext}
+  # desktop 里的中文 Name 照常显示，StartupWMClass 与 appId 对齐，图标不串
+  desktop:
+    StartupWMClass: 归一 Unyra
+
+# deb 包元数据：装上后「归一 Unyra」出现在教育类菜单，apt/商店能正确识别
+deb:
+  # Electron 应用常规运行时依赖（electron-builder 也会自动带一份，这里显式写出
+  # 是为了 apt-get install ./Unyra-*.deb 时一次解析干净，不留半配置状态）
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libdrm2
+    - libgbm1
+    - libasound2
+  # 应用数据写在 ~/.config/unyra（见 electron/storage/userData.ts），卸载不碰它
 # 更新分发：安装包与版本元数据（latest.yml）传到开源仓库（本仓库）的 Releases；
 # electron-updater 的 GitHub provider 匿名去 releases 里取 latest.yml 与安装包，
 # 不需要给任何人发 token。
@@ -110,7 +145,7 @@ dmg:
 # 只在 npm run release:publish 时才会真的上传；平时的 release:win 传 --publish never。
 publish:
   - provider: github
-    owner: maplexrain
+    owner: gass88wei
     repo: unyra
     releaseType: release
 

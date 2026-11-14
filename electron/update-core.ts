@@ -15,7 +15,7 @@
 import type { UpdateChannel } from '../shared/ipc'
 
 /** 发布仓库（开源，就是本仓库）。安装包与版本元数据都在它的 Releases 里 */
-export const RELEASE_REPO = 'maplexrain/unyra'
+export const RELEASE_REPO = 'gass88wei/unyra'
 
 /* ---------- 更新策略（正式版 / 尝鲜版） ---------- */
 

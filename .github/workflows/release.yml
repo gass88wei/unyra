@@ -1,0 +1,206 @@
+# Linux 发布工作流：推 v* tag 才触发，在云上打 .deb 并发 Release。
+#
+# 为什么单独一个工作流、且只在 tag 上跑：
+# - main 的每次 push 由 ci.yml 做类型检查/lint/测试/构建门禁，不发布；
+# - 只有维护者明确打了 tag，才走「构建 → 打包 → 发 Release」这条链。
+#
+# 为什么固定 ubuntu-22.04 而不是 ubuntu-latest：
+# 产物要给 deepin（glibc 2.38）用，必须在更老的 glibc 2.35 上构建才不会
+# 依赖上过新的符号；ubuntu-latest 的 glibc 比目标机器还新，装上去起不来。
+#
+# 全程在 Actions 里装依赖、构建、打包，维护者本机不需要 Node/npm/Electron。
+name: Release Linux
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # 创建/更新 GitHub Release 并上传产物
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false   # 发版不打断，避免半份 Release
+
+jobs:
+  build:
+    name: 构建 .deb（ubuntu-22.04）
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 与 package.json 的 engines（node >=24）保持一致
+          node-version: 24
+          cache: npm
+
+      - name: 安装依赖
+        # npm ci 严格按 package-lock.json 装，保证产物可复现
+        # Electron 45 起二进制不随 npm ci 下载（见 CONTRIBUTING），下一步显式装
+        run: npm ci
+        env:
+          # 国内网络常卡在 GitHub，Electron/原生二进制走 npmmirror 镜像（云上更稳）
+          ELECTRON_MIRROR: https://cdn.npmmirror.com/binaries/electron/
+
+      - name: 下载 Electron 运行时
+        # electron-builder.yml 里 electronDist 指向 node_modules/electron/dist，
+        # 缺了这一步打包会报「找不到 Electron 目录」
+        run: node node_modules/electron/install.js
+        env:
+          ELECTRON_MIRROR: https://cdn.npmmirror.com/binaries/electron/
+
+      - name: 门禁（类型检查 / lint / 测试 / 体积）
+        # 发版前把 ci.yml 那套门禁原样跑一遍，红的不许出包
+        run: |
+          npm run typecheck
+          npm run lint
+          npm run size:check
+          npm test
+
+      - name: 构建（渲染层 + 主进程）
+        # 与上游 release.mjs 一致：发布模式压缩主进程、不带 sourcemap
+        run: npm run build
+        env:
+          MOJI_RELEASE: '1'
+
+      - name: 打 .deb（electron-builder · Linux x64）
+        # --publish never：上传交给下一步的 gh，避免 electron-builder 建 Release
+        # 时 422 中断、更新元数据写不出来的老问题
+        run: npx electron-builder --linux deb --publish never
+
+      - name: 校验产物
+        # deb 与更新元数据都在才算完整；缺了 latest*.yml 客户端检查更新会失败
+        run: |
+          ls -lh release/*.deb release/latest*.yml
+          test -n "$(ls release/*.deb 2>/dev/null)" || { echo '没打出 .deb'; exit 1; }
+          test -n "$(ls release/latest*.yml 2>/dev/null)" || { echo '缺少 latest*.yml'; exit 1; }
+
+      - name: 启动冒烟测试（解包 → 查 glibc/CXXABI → 实际启动）
+        # 「装得上」不等于「跑得起来」：把 deb 解出来，检查 Electron 主程序及其
+        # 原生模块的动态库依赖有没有当前系统满足不了的高版本符号，再在 xvfb
+        # 里真正启动一次，抓 GLIBC_*/CXXABI_*/GLIBCXX_* 之类致命错误直接失败。
+        # 这一步全在云上的 ubuntu-22.04 跑，不碰维护者本机。
+        run: |
+          set -euo pipefail
+          DEB=$(ls release/*.deb | head -1)
+          rm -rf /tmp/unyra-smoke && mkdir -p /tmp/unyra-smoke
+          dpkg-deb -x "$DEB" /tmp/unyra-smoke
+
+          # 主程序：优先用 desktop 文件里的 Exec，否则在 /opt 下找带可执行位的 ELF 主程序
+          BIN=''
+          DESKTOP=$(find /tmp/unyra-smoke -name '*.desktop' | head -1)
+          if [ -n "$DESKTOP" ]; then
+            EXEC=$(grep -m1 '^Exec=' "$DESKTOP" | sed 's/^Exec=//;s/ %.*//;s/"//g')
+            for cand in "/tmp/unyra-smoke$EXEC" "$EXEC"; do
+              [ -x "$cand" ] && { BIN="$cand"; break; }
+            done
+          fi
+          if [ -z "$BIN" ]; then
+            BIN=$(find /tmp/unyra-smoke/opt -maxdepth 3 -type f -perm -u+x -exec sh -c 'head -c4 "$1" | grep -q ELF && echo "$1"' _ {} \; 2>/dev/null | head -1)
+          fi
+          [ -n "$BIN" ] || { echo '解包后找不到可执行的 ELF 主程序'; exit 1; }
+          echo "可执行文件: $BIN"
+
+          # 1) 静态检查：所有 ELF 依赖版本必须能被当前系统提供
+          python3 - "$BIN" <<'PY'
+          import subprocess, sys, os, re
+          root = os.path.dirname(sys.argv[1])
+          provided = set()
+          for lib in ('/lib/x86_64-linux-gnu/libc.so.6',
+                      '/usr/lib/x86_64-linux-gnu/libstdc++.so.6',
+                      '/lib/x86_64-linux-gnu/libstdc++.so.6',
+                      '/lib/x86_64-linux-gnu/libgcc_s.so.1'):
+              if os.path.exists(lib):
+                  out = subprocess.run(['objdump', '-T', lib], capture_output=True, text=True).stdout
+                  provided |= set(re.findall(r'(GLIBC_[0-9.]+|GLIBCXX_[0-9.]+|CXXABI_[0-9.]+|GCC_[0-9.]+)', out))
+          bad = []
+          ver = re.compile(r'(GLIBC_[0-9.]+|GLIBCXX_[0-9.]+|CXXABI_[0-9.]+|GCC_[0-9.]+)')
+          for base, _, files in os.walk(root):
+              for f in files:
+                  p = os.path.join(base, f)
+                  if not (f.endswith('.so') or '.so.' in f or os.access(p, os.X_OK)):
+                      continue
+                  r = subprocess.run(['objdump', '-T', p], capture_output=True, text=True)
+                  if r.returncode != 0:
+                      continue
+                  for v in set(ver.findall(r.stdout)):
+                      if v not in provided:
+                          bad.append((os.path.relpath(p, root), v))
+          if bad:
+              for f, v in sorted(set(bad))[:20]:
+                  print(f'不满足的符号版本: {f} -> {v}', file=sys.stderr)
+              sys.exit(1)
+          print('静态检查通过：没有超出构建系统的 GLIBC/CXXABI/GLIBCXX 依赖')
+          PY
+
+          # 2) 实际启动：xvfb 里跑 8 秒，主进程一启动就退出算成功；
+          #    捕获动态链接器/原生模块加载失败的错误，发现即失败
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb libgtk-3-0 libnss3 libasound2 libgbm1 >/dev/null
+          Xvfb :99 -screen 0 1280x800x24 >/tmp/xvfb.log 2>&1 &
+          XVFB_PID=$!
+          sleep 1
+          set +e
+          DISPLAY=:99 timeout 8s "$BIN" --no-sandbox --disable-gpu --user-data-dir=/tmp/unyra-smoke-data >/tmp/unyra-launch.log 2>&1
+          CODE=$?
+          set -e
+          kill "$XVFB_PID" 2>/dev/null || true
+          echo "启动退出码: $CODE（124=timeout 表示进程一直活着，视为正常）"
+          tail -40 /tmp/unyra-launch.log
+          if grep -qE 'GLIBC_[0-9.]+|GLIBCXX_[0-9.]+|CXXABI_[0-9.]+|version .* not found|error while loading shared libraries|symbol lookup error' /tmp/unyra-launch.log; then
+            echo '启动日志里出现动态库/符号版本致命错误' >&2
+            exit 1
+          fi
+          if [ "$CODE" -ne 124 ] && [ "$CODE" -ne 0 ]; then
+            echo "启动异常退出（$CODE）" >&2
+            exit 1
+          fi
+          echo '启动冒烟测试通过'
+
+      - name: 上传构建产物（排障用，保留 7 天）
+        uses: actions/upload-artifact@v4
+        with:
+          name: unyra-linux-deb
+          path: |
+            release/*.deb
+            release/latest*.yml
+          retention-days: 7
+
+  release:
+    name: 发 GitHub Release
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          name: unyra-linux-deb
+          path: release
+
+      - name: 创建 Release 并上传 .deb
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # 版本号格式：正式版 X.Y.Z / 尝鲜版 X.Y.Z-beta.N / 内测版 X.Y.Z-alpha
+          # 带 - 的标 prerelease、不占 Latest（与上游发布约定一致）
+          case "$TAG" in
+            *-*) VISIBILITY=--prerelease ;;
+            *)   VISIBILITY=--latest ;;
+          esac
+          NOTES="release-notes/${TAG}.md"
+          if [ -f "$NOTES" ]; then NOTES_ARGS=(--notes-file "$NOTES"); else NOTES_ARGS=(--generate-notes); fi
+          # 同一 tag 重跑时补传文件而不是失败退出
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/*.deb release/latest*.yml --clobber
+          else
+            gh release create "$TAG" \
+              --title "归一 Unyra $TAG（Linux）" \
+              "$VISIBILITY" \
+              "${NOTES_ARGS[@]}" \
+              release/*.deb release/latest*.yml
+          fi
+          gh release view "$TAG" --json assets --jq '.assets[].name'
